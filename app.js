@@ -1,4 +1,7 @@
-const STORAGE_KEY = "hotkey-deck-state-v2";
+const PROFILE_STORAGE_KEY = "hotkey-deck-profiles-v1";
+const BRIDGE_CODE_KEY = "hotkey-deck-bridge-code";
+const LEGACY_STORAGE_KEYS = ["hotkey-deck-state-v2", "hotkey-deck-state-v1"];
+const DEFAULT_PROFILE_ID = "default";
 
 const palette = ["#32d7ff", "#89f27e", "#ffc95b", "#ff5f83", "#7096ff", "#b98cff", "#f3f7ff"];
 const pickerIcons = [
@@ -90,6 +93,10 @@ const defaultButtons = [
 const els = {
   grid: document.querySelector("#buttonGrid"),
   deckStatus: document.querySelector("#deckStatus"),
+  profileSelect: document.querySelector("#profileSelect"),
+  addProfile: document.querySelector("#addProfile"),
+  bridgeCode: document.querySelector("#bridgeCode"),
+  saveBridge: document.querySelector("#saveBridge"),
   rowsInput: document.querySelector("#rowsInput"),
   colsInput: document.querySelector("#colsInput"),
   resetDeck: document.querySelector("#resetDeck"),
@@ -107,12 +114,14 @@ const els = {
   saveButton: document.querySelector("#saveButton"),
 };
 
-let state = loadState();
+let store = loadStore();
+let state = getActiveProfile().state;
 let selectedIndex = null;
 let draftKeys = [];
 let draftIcon = "play";
 let draftImage = "";
 let recording = false;
+let bridgeCode = localStorage.getItem(BRIDGE_CODE_KEY) || "";
 
 function createEmptyButton(index) {
   return {
@@ -133,22 +142,74 @@ function createDefaultState() {
   return { rows: 2, cols: 4, buttons };
 }
 
-function loadState() {
+function loadStore() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return createDefaultState();
+    const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
+    if (!raw) return createInitialStore();
     const parsed = JSON.parse(raw);
-    const rows = clampNumber(parsed.rows, 1, 5, 2);
-    const cols = clampNumber(parsed.cols, 1, 8, 4);
-    const total = rows * cols;
-    const buttons = Array.from({ length: total }, (_, index) => {
-      const saved = parsed.buttons?.[index];
-      return saved ? normalizeButton(saved, index) : createEmptyButton(index);
-    });
-    return { rows, cols, buttons };
+    return normalizeStore(parsed);
   } catch {
-    return createDefaultState();
+    return createInitialStore();
   }
+}
+
+function createInitialStore() {
+  return {
+    activeProfileId: DEFAULT_PROFILE_ID,
+    profiles: [
+      {
+        id: DEFAULT_PROFILE_ID,
+        name: "내 단축키",
+        state: loadLegacyState() || createDefaultState(),
+      },
+    ],
+  };
+}
+
+function loadLegacyState() {
+  for (const key of LEGACY_STORAGE_KEYS) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) return normalizeState(JSON.parse(raw));
+    } catch {
+      // Ignore broken legacy data and keep looking.
+    }
+  }
+  return null;
+}
+
+function normalizeStore(nextStore) {
+  const rawProfiles = Array.isArray(nextStore.profiles) ? nextStore.profiles : [];
+  const profiles = rawProfiles.length
+    ? rawProfiles.map((profile, index) => normalizeProfile(profile, index))
+    : createInitialStore().profiles;
+  const activeProfileId = profiles.some((profile) => profile.id === nextStore.activeProfileId)
+    ? nextStore.activeProfileId
+    : profiles[0].id;
+  return { activeProfileId, profiles };
+}
+
+function normalizeProfile(profile, index) {
+  return {
+    id: String(profile.id || `profile-${index + 1}`),
+    name: String(profile.name || `Profile ${index + 1}`).slice(0, 24),
+    state: normalizeState(profile.state || profile),
+  };
+}
+
+function normalizeState(nextState) {
+  const rows = clampNumber(nextState.rows, 1, 5, 2);
+  const cols = clampNumber(nextState.cols, 1, 8, 4);
+  const total = rows * cols;
+  const buttons = Array.from({ length: total }, (_, index) => {
+    const saved = nextState.buttons?.[index];
+    return saved ? normalizeButton(saved, index) : createEmptyButton(index);
+  });
+  return { rows, cols, buttons };
+}
+
+function getActiveProfile() {
+  return store.profiles.find((profile) => profile.id === store.activeProfileId) || store.profiles[0];
 }
 
 function normalizeButton(button, index) {
@@ -188,7 +249,12 @@ function normalizeLogoIcon(iconName, label) {
 }
 
 function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  getActiveProfile().state = state;
+  saveStore();
+}
+
+function saveStore() {
+  localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(store));
 }
 
 function clampNumber(value, min, max, fallback) {
@@ -205,6 +271,8 @@ function inferMotion(iconName) {
 }
 
 function render() {
+  renderProfiles();
+  els.bridgeCode.value = bridgeCode;
   els.rowsInput.value = state.rows;
   els.colsInput.value = state.cols;
   els.grid.style.setProperty("--cols", state.cols);
@@ -236,6 +304,17 @@ function render() {
   });
 
   renderEditor();
+}
+
+function renderProfiles() {
+  els.profileSelect.innerHTML = "";
+  store.profiles.forEach((profile) => {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.textContent = profile.name;
+    option.selected = profile.id === store.activeProfileId;
+    els.profileSelect.appendChild(option);
+  });
 }
 
 function renderEditor() {
@@ -285,6 +364,7 @@ function pressButton(index) {
 
   if (navigator.vibrate) navigator.vibrate(18);
   emitShortcut(button.keys);
+  sendBridgeShortcut(button.keys);
   setStatus(formatKeys(button.keys) || button.label || "EMPTY");
   renderEditor();
 }
@@ -315,6 +395,29 @@ function emitShortcut(keys) {
   window.dispatchEvent(new CustomEvent("macro-pad-shortcut", { detail: { keys } }));
 }
 
+async function sendBridgeShortcut(keys) {
+  if (!keys.length || !bridgeCode) return;
+  try {
+    const response = await fetch("/api/shortcut", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Pairing-Code": bridgeCode,
+      },
+      body: JSON.stringify({ keys }),
+    });
+    if (response.ok) {
+      setStatus("SENT");
+    } else if (response.status === 401) {
+      setStatus("PAIR");
+    } else {
+      setStatus("BRIDGE");
+    }
+  } catch {
+    setStatus("LOCAL");
+  }
+}
+
 function setStatus(text) {
   els.deckStatus.textContent = text.toUpperCase();
   window.clearTimeout(setStatus.timer);
@@ -323,10 +426,59 @@ function setStatus(text) {
   }, 900);
 }
 
+els.profileSelect.addEventListener("change", () => {
+  switchProfile(els.profileSelect.value);
+});
+
+els.addProfile.addEventListener("click", addProfile);
+els.saveBridge.addEventListener("click", saveBridgeCode);
+els.bridgeCode.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") saveBridgeCode();
+});
 els.rowsInput.addEventListener("input", updateLayout);
 els.colsInput.addEventListener("input", updateLayout);
 els.rowsInput.addEventListener("change", updateLayout);
 els.colsInput.addEventListener("change", updateLayout);
+
+function switchProfile(profileId) {
+  if (!store.profiles.some((profile) => profile.id === profileId)) return;
+  saveState();
+  store.activeProfileId = profileId;
+  state = getActiveProfile().state;
+  selectedIndex = null;
+  saveStore();
+  render();
+  setStatus(getActiveProfile().name);
+}
+
+function addProfile() {
+  const name = window.prompt("프로필 이름", `Profile ${store.profiles.length + 1}`);
+  if (!name) return;
+  const profile = {
+    id: `profile-${Date.now()}`,
+    name: name.trim().slice(0, 24) || `Profile ${store.profiles.length + 1}`,
+    state: createDefaultState(),
+  };
+  saveState();
+  store.profiles.push(profile);
+  store.activeProfileId = profile.id;
+  state = profile.state;
+  selectedIndex = null;
+  saveStore();
+  render();
+  setStatus("PROFILE");
+}
+
+function saveBridgeCode() {
+  bridgeCode = els.bridgeCode.value.trim();
+  if (bridgeCode) {
+    localStorage.setItem(BRIDGE_CODE_KEY, bridgeCode);
+    setStatus("LINKED");
+  } else {
+    localStorage.removeItem(BRIDGE_CODE_KEY);
+    setStatus("LOCAL");
+  }
+}
 
 function updateLayout() {
   const rows = clampNumber(els.rowsInput.value, 1, 5, state.rows);
@@ -509,6 +661,7 @@ function iconSvg(name) {
     trash: `<path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v5"></path><path d="M14 11v5"></path>`,
     keyboard: `<rect width="20" height="16" x="2" y="4" rx="2"></rect><path d="M6 8h.01"></path><path d="M10 8h.01"></path><path d="M14 8h.01"></path><path d="M18 8h.01"></path><path d="M8 12h.01"></path><path d="M12 12h.01"></path><path d="M16 12h.01"></path><path d="M7 16h10"></path>`,
     refresh: `<path d="M3 12a9 9 0 0 1 15.5-6.2"></path><path d="M18 2v4h-4"></path><path d="M21 12a9 9 0 0 1-15.5 6.2"></path><path d="M6 22v-4h4"></path>`,
+    plus: `<path d="M12 5v14"></path><path d="M5 12h14"></path>`,
     smartphone: `<rect width="14" height="20" x="5" y="2" rx="2"></rect><path d="M12 18h.01"></path>`,
   };
   return `<svg ${attrs}>${paths[name] || paths.play}</svg>`;

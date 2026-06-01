@@ -41,7 +41,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -379,6 +380,7 @@ h2 {
 }
 
 .control-row,
+.profile-row,
 .field {
   display: grid;
   gap: 0.45rem;
@@ -390,6 +392,11 @@ h2 {
   align-items: center;
 }
 
+.profile-row {
+  grid-template-columns: 1fr minmax(0, 1.45fr) 2.55rem;
+  align-items: center;
+}
+
 label {
   color: #c7ccd6;
   font-size: 0.78rem;
@@ -397,7 +404,8 @@ label {
 }
 
 input[type="number"],
-input[type="text"] {
+input[type="text"],
+select {
   min-width: 0;
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -409,6 +417,7 @@ input[type="text"] {
 }
 
 input:focus,
+select:focus,
 button:focus-visible {
   outline: 2px solid rgba(50, 215, 255, 0.78);
   outline-offset: 2px;
