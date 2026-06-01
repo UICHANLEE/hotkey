@@ -381,6 +381,7 @@ h2 {
 
 .control-row,
 .profile-row,
+.bridge-row,
 .field {
   display: grid;
   gap: 0.45rem;
@@ -394,6 +395,11 @@ h2 {
 
 .profile-row {
   grid-template-columns: 1fr minmax(0, 1.45fr) 2.55rem;
+  align-items: center;
+}
+
+.bridge-row {
+  grid-template-columns: 1fr minmax(0, 1.2fr) auto;
   align-items: center;
 }
 
