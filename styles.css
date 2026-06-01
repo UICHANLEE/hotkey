@@ -28,6 +28,7 @@
 html,
 body {
   min-height: 100%;
+  touch-action: manipulation;
 }
 
 body {
@@ -38,6 +39,7 @@ body {
     radial-gradient(circle at 88% 72%, rgba(255, 95, 131, 0.06), transparent 24rem),
     linear-gradient(135deg, #050609, #11141a 54%, #07080c);
   overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
 }
 
 button,
@@ -53,10 +55,14 @@ button {
 .app-shell {
   min-height: 100svh;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(17rem, 21rem);
-  gap: clamp(1rem, 2vw, 1.5rem);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
   padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
     max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+}
+
+body.is-locked .app-shell {
+  visibility: hidden;
 }
 
 .deck-wrap {
@@ -116,6 +122,13 @@ button {
   gap: 1rem;
   margin-bottom: clamp(0.8rem, 2vw, 1.25rem);
   padding-inline: 0.25rem;
+}
+
+.deck-actions,
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
 }
 
 .eyebrow {
@@ -186,6 +199,10 @@ h2 {
     inset 0 0.08rem 0 rgba(255, 255, 255, 0.14),
     inset 0 -0.32rem 0.42rem rgba(0, 0, 0, 0.75);
   cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
   transform: translateY(0);
   transition:
     transform 160ms ease,
@@ -338,12 +355,29 @@ h2 {
 }
 
 .control-panel {
-  align-self: center;
-  max-height: calc(100svh - 2rem);
+  position: fixed;
+  top: max(0.75rem, env(safe-area-inset-top));
+  right: max(0.75rem, env(safe-area-inset-right));
+  bottom: max(0.75rem, env(safe-area-inset-bottom));
+  z-index: 8;
+  width: min(22rem, calc(100vw - 1.5rem));
   overflow: auto;
   padding: 1rem;
-  border-left: 1px solid rgba(255, 255, 255, 0.1);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012));
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 0.9rem;
+  background:
+    linear-gradient(180deg, rgba(28, 31, 39, 0.96), rgba(9, 10, 14, 0.98));
+  box-shadow: 0 1.2rem 2.6rem rgba(0, 0, 0, 0.62);
+  transform: translateX(calc(100% + 1.5rem));
+  transition: transform 180ms ease;
+}
+
+body.is-settings-open .control-panel {
+  transform: translateX(0);
+}
+
+body.is-locked .control-panel {
+  display: none;
 }
 
 .panel-head,
@@ -524,6 +558,55 @@ input[type="file"] {
   background: rgba(5, 6, 9, 0.94);
 }
 
+.pair-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 50% 35%, rgba(50, 215, 255, 0.11), transparent 21rem),
+    rgba(5, 6, 9, 0.94);
+}
+
+.pair-overlay[hidden] {
+  display: none;
+}
+
+.pair-card {
+  width: min(100%, 25rem);
+  padding: 1.2rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.9rem;
+  background: linear-gradient(180deg, rgba(24, 28, 36, 0.96), rgba(8, 10, 14, 0.98));
+  box-shadow: 0 1.5rem 3rem rgba(0, 0, 0, 0.55);
+}
+
+.pair-card h2 {
+  font-size: 1.35rem;
+}
+
+.pair-copy,
+.pair-message {
+  margin: 0.65rem 0 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.pair-message.is-error {
+  color: #ff9aae;
+}
+
+.pair-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.55rem;
+  margin-top: 1rem;
+}
+
 .rotate-overlay p {
   margin: 0;
   font-weight: 900;
@@ -559,19 +642,12 @@ input[type="file"] {
   .deck-case {
     min-height: auto;
   }
-
-  .control-panel {
-    align-self: stretch;
-    max-height: none;
-    border-left: 0;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
-  }
 }
 
 @media (max-height: 520px) and (orientation: landscape) {
   .app-shell {
-    grid-template-columns: minmax(0, 1fr) minmax(15rem, 18rem);
-    gap: 0.7rem;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
     padding: 0.6rem;
   }
 
@@ -589,8 +665,8 @@ input[type="file"] {
     padding: 0.68rem;
   }
 
-  .control-panel {
-    max-height: calc(100svh - 1.2rem);
+  .control-panel,
+  .pair-card {
     padding: 0.75rem;
   }
 }

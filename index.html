@@ -2,12 +2,12 @@
 <html lang="ko">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#08090d" />
     <title>Stream Deck Style Macro Pad</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body>
+  <body class="is-locked">
     <main class="app-shell" aria-label="Stream Deck style macro pad">
       <section class="deck-wrap">
         <div class="deck-case" aria-label="Macro pad case">
@@ -17,21 +17,31 @@
               <p class="eyebrow">Toss CX</p>
               <h1>Audio Clipping for Busan</h1>
             </div>
-            <div class="deck-status" id="deckStatus">READY</div>
+            <div class="deck-actions">
+              <div class="deck-status" id="deckStatus">READY</div>
+              <button class="icon-btn" id="settingsToggle" type="button" aria-label="설정 열기" title="Settings">
+                <span data-icon="settings"></span>
+              </button>
+            </div>
           </div>
           <div class="button-grid" id="buttonGrid"></div>
         </div>
       </section>
 
-      <aside class="control-panel" aria-label="Macro settings">
+      <aside class="control-panel" id="controlPanel" aria-label="Macro settings">
         <div class="panel-head">
           <div>
             <p class="eyebrow">SETTINGS</p>
             <h2 id="panelTitle">Deck Layout</h2>
           </div>
-          <button class="icon-btn" id="resetDeck" type="button" aria-label="기본 프리셋으로 초기화" title="Reset">
-            <span data-icon="refresh"></span>
-          </button>
+          <div class="panel-actions">
+            <button class="icon-btn" id="resetDeck" type="button" aria-label="기본 프리셋으로 초기화" title="Reset">
+              <span data-icon="refresh"></span>
+            </button>
+            <button class="icon-btn" id="closeSettings" type="button" aria-label="설정 닫기" title="Close">
+              <span data-icon="x"></span>
+            </button>
+          </div>
         </div>
 
         <div class="profile-row">
@@ -94,6 +104,19 @@
         </form>
       </aside>
     </main>
+
+    <form class="pair-overlay" id="pairOverlay" aria-label="Pair code required">
+      <div class="pair-card">
+        <p class="eyebrow">PAIRING</p>
+        <h2>Pair Code</h2>
+        <p class="pair-copy">컴퓨터 브리지 서버에 표시된 코드를 입력해야 단축키가 열립니다.</p>
+        <div class="pair-line">
+          <input id="pairCodeInput" type="text" inputmode="numeric" maxlength="8" autocomplete="one-time-code" />
+          <button class="text-btn primary" type="submit">Link</button>
+        </div>
+        <p class="pair-message" id="pairMessage">터미널에 표시된 Pair code를 입력하세요.</p>
+      </div>
+    </form>
 
     <div class="rotate-overlay" aria-live="polite">
       <div class="phone-tilt">

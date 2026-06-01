@@ -1,11 +1,12 @@
 const { createServer } = require("node:http");
 const { readFile } = require("node:fs/promises");
-const { extname, join, normalize } = require("node:path");
+const { extname, resolve, sep } = require("node:path");
 const { spawn } = require("node:child_process");
 const { networkInterfaces } = require("node:os");
 
 const PORT = Number(process.env.PORT || 4173);
 const ROOT = __dirname;
+const ROOT_PATH = resolve(ROOT);
 const PAIRING_CODE = process.env.PAIRING_CODE || String(Math.floor(100000 + Math.random() * 900000));
 
 const contentTypes = {
@@ -17,6 +18,11 @@ const contentTypes = {
 
 createServer(async (request, response) => {
   try {
+    if (request.method === "POST" && request.url === "/api/pair") {
+      handlePair(request, response);
+      return;
+    }
+
     if (request.method === "POST" && request.url === "/api/shortcut") {
       await handleShortcut(request, response);
       return;
@@ -42,9 +48,9 @@ createServer(async (request, response) => {
 async function serveFile(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
   const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
-  const filePath = normalize(join(ROOT, pathname));
+  const filePath = resolve(ROOT_PATH, `.${pathname}`);
 
-  if (!filePath.startsWith(ROOT)) {
+  if (!isInsideRoot(filePath)) {
     send(response, 403, "Forbidden");
     return;
   }
@@ -68,7 +74,8 @@ async function handleShortcut(request, response) {
   }
 
   const body = await readBody(request);
-  const payload = JSON.parse(body || "{}");
+  const payload = parseJsonBody(body, response);
+  if (!payload) return;
   const keys = Array.isArray(payload.keys) ? payload.keys.map(String) : [];
 
   if (!keys.length) {
@@ -76,8 +83,30 @@ async function handleShortcut(request, response) {
     return;
   }
 
-  await sendMacShortcut(keys);
+  await sendShortcut(keys);
   sendJson(response, 200, { ok: true });
+}
+
+function handlePair(request, response) {
+  if (request.headers["x-pairing-code"] !== PAIRING_CODE) {
+    sendJson(response, 401, { ok: false, error: "pairing_required" });
+    return;
+  }
+
+  sendJson(response, 200, { ok: true });
+}
+
+function parseJsonBody(body, response) {
+  try {
+    return JSON.parse(body || "{}");
+  } catch {
+    sendJson(response, 400, { ok: false, error: "invalid_json" });
+    return null;
+  }
+}
+
+function isInsideRoot(filePath) {
+  return filePath === ROOT_PATH || filePath.startsWith(`${ROOT_PATH}${sep}`);
 }
 
 function readBody(request) {
@@ -95,6 +124,12 @@ function readBody(request) {
   });
 }
 
+function sendShortcut(keys) {
+  if (process.platform === "darwin") return sendMacShortcut(keys);
+  if (process.platform === "win32") return sendWindowsShortcut(keys);
+  throw new Error(`Unsupported platform: ${process.platform}`);
+}
+
 function sendMacShortcut(keys) {
   const script = buildAppleScript(keys);
   return new Promise((resolve, reject) => {
@@ -106,6 +141,29 @@ function sendMacShortcut(keys) {
     child.on("close", (code) => {
       if (code === 0) resolve();
       else reject(new Error(stderr || `osascript exited with ${code}`));
+    });
+  });
+}
+
+function sendWindowsShortcut(keys) {
+  const sendKeys = buildWindowsSendKeys(keys);
+  const command = [
+    "Add-Type -AssemblyName System.Windows.Forms;",
+    `[System.Windows.Forms.SendKeys]::SendWait('${escapePowerShellSingleQuoted(sendKeys)}')`,
+  ].join(" ");
+
+  return new Promise((resolve, reject) => {
+    const child = spawn("powershell.exe", ["-NoProfile", "-Command", command], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(stderr || `powershell exited with ${code}`));
     });
   });
 }
@@ -124,7 +182,7 @@ function buildAppleScript(keys) {
   }
 
   if (/^[a-zA-Z0-9]$/.test(primary)) {
-    return `tell application "System Events" to key stroke "${primary.toLowerCase()}"${usingClause}`;
+    return `tell application "System Events" to keystroke "${primary.toLowerCase()}"${usingClause}`;
   }
 
   throw new Error(`Unsupported key: ${primary}`);
@@ -153,6 +211,48 @@ function keyCodeFor(key) {
     Down: 125,
     Up: 126,
   }[key] ?? null;
+}
+
+function buildWindowsSendKeys(keys) {
+  const modifiers = keys
+    .slice(0, -1)
+    .map((key) => windowsModifierName(key))
+    .filter(Boolean)
+    .join("");
+  const primary = windowsPrimaryKey(keys[keys.length - 1]);
+  return `${modifiers}${primary}`;
+}
+
+function windowsModifierName(key) {
+  return {
+    Alt: "%",
+    Ctrl: "^",
+    Shift: "+",
+  }[key];
+}
+
+function windowsPrimaryKey(key) {
+  const specialKeys = {
+    "'": "'",
+    Space: " ",
+    Enter: "{ENTER}",
+    Return: "{ENTER}",
+    Tab: "{TAB}",
+    Esc: "{ESC}",
+    Escape: "{ESC}",
+    Left: "{LEFT}",
+    Right: "{RIGHT}",
+    Down: "{DOWN}",
+    Up: "{UP}",
+  };
+
+  if (specialKeys[key]) return specialKeys[key];
+  if (/^[a-zA-Z0-9]$/.test(key)) return key.toLowerCase();
+  throw new Error(`Unsupported Windows key: ${key}`);
+}
+
+function escapePowerShellSingleQuoted(value) {
+  return value.replace(/'/g, "''");
 }
 
 function getLocalUrls() {

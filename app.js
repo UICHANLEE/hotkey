@@ -93,6 +93,12 @@ const defaultButtons = [
 const els = {
   grid: document.querySelector("#buttonGrid"),
   deckStatus: document.querySelector("#deckStatus"),
+  settingsToggle: document.querySelector("#settingsToggle"),
+  closeSettings: document.querySelector("#closeSettings"),
+  controlPanel: document.querySelector("#controlPanel"),
+  pairOverlay: document.querySelector("#pairOverlay"),
+  pairCodeInput: document.querySelector("#pairCodeInput"),
+  pairMessage: document.querySelector("#pairMessage"),
   profileSelect: document.querySelector("#profileSelect"),
   addProfile: document.querySelector("#addProfile"),
   bridgeCode: document.querySelector("#bridgeCode"),
@@ -122,6 +128,7 @@ let draftIcon = "play";
 let draftImage = "";
 let recording = false;
 let bridgeCode = localStorage.getItem(BRIDGE_CODE_KEY) || "";
+let isLinked = false;
 
 function createEmptyButton(index) {
   return {
@@ -273,6 +280,7 @@ function inferMotion(iconName) {
 function render() {
   renderProfiles();
   els.bridgeCode.value = bridgeCode;
+  els.pairCodeInput.value = bridgeCode;
   els.rowsInput.value = state.rows;
   els.colsInput.value = state.cols;
   els.grid.style.setProperty("--cols", state.cols);
@@ -304,6 +312,7 @@ function render() {
   });
 
   renderEditor();
+  syncSettingsPanelState();
 }
 
 function renderProfiles() {
@@ -336,6 +345,44 @@ function renderEditor() {
   draftImage = button.image || "";
   els.shortcutText.textContent = formatKeys(draftKeys) || "Record keys";
   renderIconPicker();
+}
+
+function lockApp(message = "터미널에 표시된 Pair code를 입력하세요.", isError = false) {
+  isLinked = false;
+  document.body.classList.add("is-locked");
+  document.body.classList.remove("is-linked", "is-settings-open");
+  els.pairOverlay.hidden = false;
+  els.pairMessage.textContent = message;
+  els.pairMessage.classList.toggle("is-error", isError);
+  syncSettingsPanelState();
+}
+
+function unlockApp() {
+  isLinked = true;
+  document.body.classList.remove("is-locked");
+  document.body.classList.add("is-linked");
+  els.pairOverlay.hidden = true;
+  els.pairMessage.classList.remove("is-error");
+  syncSettingsPanelState();
+}
+
+function syncSettingsPanelState() {
+  const isOpen = document.body.classList.contains("is-settings-open") && isLinked;
+  els.controlPanel.setAttribute("aria-hidden", String(!isOpen));
+  if ("inert" in els.controlPanel) {
+    els.controlPanel.inert = !isOpen;
+  }
+}
+
+function openSettings() {
+  if (!isLinked) return;
+  document.body.classList.add("is-settings-open");
+  syncSettingsPanelState();
+}
+
+function closeSettings() {
+  document.body.classList.remove("is-settings-open");
+  syncSettingsPanelState();
 }
 
 function renderIconPicker() {
@@ -410,12 +457,55 @@ async function sendBridgeShortcut(keys) {
       setStatus("SENT");
     } else if (response.status === 401) {
       setStatus("PAIR");
+      localStorage.removeItem(BRIDGE_CODE_KEY);
+      lockApp("Pair Code가 맞지 않습니다. 다시 링크하세요.", true);
     } else {
       setStatus("BRIDGE");
     }
   } catch {
-    setStatus("LOCAL");
+    setStatus("OFFLINE");
+    lockApp("브리지 서버 연결이 끊겼습니다. 같은 주소로 다시 접속하세요.", true);
   }
+}
+
+async function verifyPairCode(code) {
+  try {
+    const response = await fetch("/api/pair", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Pairing-Code": code,
+      },
+      body: JSON.stringify({}),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function linkPairCode(code) {
+  const nextCode = code.trim();
+  if (!nextCode) {
+    lockApp("Pair Code를 입력하세요.", true);
+    return false;
+  }
+
+  els.pairMessage.textContent = "링크 확인 중...";
+  els.pairMessage.classList.remove("is-error");
+  const ok = await verifyPairCode(nextCode);
+  if (!ok) {
+    lockApp("Pair Code가 틀렸거나 브리지 서버로 접속하지 않았습니다.", true);
+    return false;
+  }
+
+  bridgeCode = nextCode;
+  localStorage.setItem(BRIDGE_CODE_KEY, bridgeCode);
+  els.bridgeCode.value = bridgeCode;
+  els.pairCodeInput.value = bridgeCode;
+  unlockApp();
+  setStatus("LINKED");
+  return true;
 }
 
 function setStatus(text) {
@@ -430,11 +520,27 @@ els.profileSelect.addEventListener("change", () => {
   switchProfile(els.profileSelect.value);
 });
 
+els.settingsToggle.addEventListener("click", () => {
+  if (document.body.classList.contains("is-settings-open")) closeSettings();
+  else openSettings();
+});
+els.closeSettings.addEventListener("click", closeSettings);
+els.pairOverlay.addEventListener("submit", (event) => {
+  event.preventDefault();
+  linkPairCode(els.pairCodeInput.value);
+});
 els.addProfile.addEventListener("click", addProfile);
 els.saveBridge.addEventListener("click", saveBridgeCode);
 els.bridgeCode.addEventListener("keydown", (event) => {
   if (event.key === "Enter") saveBridgeCode();
 });
+document.addEventListener(
+  "dblclick",
+  (event) => {
+    event.preventDefault();
+  },
+  { passive: false },
+);
 els.rowsInput.addEventListener("input", updateLayout);
 els.colsInput.addEventListener("input", updateLayout);
 els.rowsInput.addEventListener("change", updateLayout);
@@ -469,14 +575,14 @@ function addProfile() {
   setStatus("PROFILE");
 }
 
-function saveBridgeCode() {
-  bridgeCode = els.bridgeCode.value.trim();
-  if (bridgeCode) {
-    localStorage.setItem(BRIDGE_CODE_KEY, bridgeCode);
-    setStatus("LINKED");
+async function saveBridgeCode() {
+  const nextCode = els.bridgeCode.value.trim();
+  if (nextCode) {
+    await linkPairCode(nextCode);
   } else {
+    bridgeCode = "";
     localStorage.removeItem(BRIDGE_CODE_KEY);
-    setStatus("LOCAL");
+    lockApp("Pair Code를 입력하세요.", true);
   }
 }
 
@@ -662,6 +768,8 @@ function iconSvg(name) {
     keyboard: `<rect width="20" height="16" x="2" y="4" rx="2"></rect><path d="M6 8h.01"></path><path d="M10 8h.01"></path><path d="M14 8h.01"></path><path d="M18 8h.01"></path><path d="M8 12h.01"></path><path d="M12 12h.01"></path><path d="M16 12h.01"></path><path d="M7 16h10"></path>`,
     refresh: `<path d="M3 12a9 9 0 0 1 15.5-6.2"></path><path d="M18 2v4h-4"></path><path d="M21 12a9 9 0 0 1-15.5 6.2"></path><path d="M6 22v-4h4"></path>`,
     plus: `<path d="M12 5v14"></path><path d="M5 12h14"></path>`,
+    settings: `<path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 1 1 7.1 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"></path>`,
+    x: `<path d="M18 6 6 18"></path><path d="m6 6 12 12"></path>`,
     smartphone: `<rect width="14" height="20" x="5" y="2" rx="2"></rect><path d="M12 18h.01"></path>`,
   };
   return `<svg ${attrs}>${paths[name] || paths.play}</svg>`;
@@ -672,3 +780,7 @@ document.querySelectorAll("[data-icon]").forEach((node) => {
 });
 
 render();
+lockApp();
+if (bridgeCode) {
+  linkPairCode(bridgeCode);
+}
