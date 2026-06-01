@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#08090d" />
+    <title>Stream Deck Style Macro Pad</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell" aria-label="Stream Deck style macro pad">
+      <section class="deck-wrap">
+        <div class="deck-case" aria-label="Macro pad case">
+          <div class="case-glint"></div>
+          <div class="status-rail">
+            <div>
+              <p class="eyebrow">MACRO PAD</p>
+              <h1>Hotkey Deck</h1>
+            </div>
+            <div class="deck-status" id="deckStatus">READY</div>
+          </div>
+          <div class="button-grid" id="buttonGrid"></div>
+        </div>
+      </section>
+
+      <aside class="control-panel" aria-label="Macro settings">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">SETTINGS</p>
+            <h2 id="panelTitle">Deck Layout</h2>
+          </div>
+          <button class="icon-btn" id="resetDeck" type="button" aria-label="기본 프리셋으로 초기화" title="Reset">
+            <span data-icon="refresh"></span>
+          </button>
+        </div>
+
+        <div class="control-row">
+          <label for="rowsInput">Rows</label>
+          <input id="rowsInput" type="number" min="1" max="5" inputmode="numeric" />
+        </div>
+        <div class="control-row">
+          <label for="colsInput">Columns</label>
+          <input id="colsInput" type="number" min="1" max="8" inputmode="numeric" />
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="editor-empty" id="editorEmpty">버튼을 선택하세요.</div>
+        <form class="editor" id="buttonEditor" hidden>
+          <div class="field">
+            <label for="labelInput">Label</label>
+            <input id="labelInput" type="text" maxlength="10" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="captionInput">Name</label>
+            <input id="captionInput" type="text" maxlength="24" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="keyRecorder">Shortcut</label>
+            <button class="recorder" id="keyRecorder" type="button">
+              <span id="shortcutText">Record keys</span>
+              <span data-icon="keyboard"></span>
+            </button>
+          </div>
+          <div class="field">
+            <label>Icon</label>
+            <div class="icon-picker" id="iconPicker"></div>
+          </div>
+          <div class="field">
+            <label for="imageInput">Image</label>
+            <div class="upload-line">
+              <input id="imageInput" type="file" accept="image/*" />
+              <button class="text-btn" id="clearImage" type="button">Clear</button>
+            </div>
+          </div>
+          <div class="button-line">
+            <button class="text-btn danger" id="clearButton" type="button">Clear Button</button>
+            <button class="text-btn primary" id="saveButton" type="submit">Apply</button>
+          </div>
+        </form>
+      </aside>
+    </main>
+
+    <div class="rotate-overlay" aria-live="polite">
+      <div class="phone-tilt">
+        <span data-icon="smartphone"></span>
+      </div>
+      <p>가로로 돌려주세요</p>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
