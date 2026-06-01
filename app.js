@@ -1,5 +1,6 @@
 const PROFILE_STORAGE_KEY = "hotkey-deck-profiles-v1";
 const BRIDGE_CODE_KEY = "hotkey-deck-bridge-code";
+const REMOTE_TOKEN_KEY = "hotkey-deck-remote-token";
 const LEGACY_STORAGE_KEYS = ["hotkey-deck-state-v2", "hotkey-deck-state-v1"];
 const DEFAULT_PROFILE_ID = "default";
 
@@ -93,6 +94,7 @@ const defaultButtons = [
 const els = {
   grid: document.querySelector("#buttonGrid"),
   deckStatus: document.querySelector("#deckStatus"),
+  lastCommand: document.querySelector("#lastCommand"),
   settingsToggle: document.querySelector("#settingsToggle"),
   closeSettings: document.querySelector("#closeSettings"),
   controlPanel: document.querySelector("#controlPanel"),
@@ -128,7 +130,12 @@ let draftIcon = "play";
 let draftImage = "";
 let recording = false;
 let bridgeCode = localStorage.getItem(BRIDGE_CODE_KEY) || "";
+let hostToken = "";
+let remoteToken = localStorage.getItem(REMOTE_TOKEN_KEY) || "";
+let lastCommandId = 0;
+let pollTimer = 0;
 let isLinked = false;
+let isHost = detectHostMode();
 
 function createEmptyButton(index) {
   return {
@@ -270,6 +277,13 @@ function clampNumber(value, min, max, fallback) {
   return Math.min(max, Math.max(min, next));
 }
 
+function detectHostMode() {
+  const role = new URLSearchParams(window.location.search).get("role");
+  if (role === "host") return true;
+  if (role === "remote") return false;
+  return !(window.matchMedia("(pointer: coarse)").matches && window.innerWidth < 900);
+}
+
 function inferMotion(iconName) {
   if (iconName === "rotate-ccw" || iconName === "rotate-cw") return "rotate";
   if (iconName === "chevron-left" || iconName === "mark-start-left" || iconName === "mark-end-left" || iconName === "undo") return "left";
@@ -357,10 +371,23 @@ function lockApp(message = "터미널에 표시된 Pair code를 입력하세요.
   syncSettingsPanelState();
 }
 
+function lockRemote(message = "컴퓨터 화면에 표시된 Pair Code를 입력하세요.", isError = false) {
+  lockApp(message, isError);
+}
+
 function unlockApp() {
   isLinked = true;
   document.body.classList.remove("is-locked");
   document.body.classList.add("is-linked");
+  els.pairOverlay.hidden = true;
+  els.pairMessage.classList.remove("is-error");
+  syncSettingsPanelState();
+}
+
+function unlockHost() {
+  isLinked = true;
+  document.body.classList.remove("is-locked");
+  document.body.classList.add("is-linked", "is-settings-open");
   els.pairOverlay.hidden = true;
   els.pairMessage.classList.remove("is-error");
   syncSettingsPanelState();
@@ -410,8 +437,8 @@ function pressButton(index) {
   window.setTimeout(() => node?.classList.remove("is-pressed"), 230);
 
   if (navigator.vibrate) navigator.vibrate(18);
-  emitShortcut(button.keys);
-  sendBridgeShortcut(button.keys);
+  if (isHost) handleReceivedShortcut(button.keys);
+  else sendBridgeShortcut(button.keys);
   setStatus(formatKeys(button.keys) || button.label || "EMPTY");
   renderEditor();
 }
@@ -444,44 +471,55 @@ function emitShortcut(keys) {
 
 async function sendBridgeShortcut(keys) {
   if (!keys.length || !bridgeCode) return;
+  if (isHost) {
+    handleReceivedShortcut(keys);
+    return;
+  }
+
   try {
-    const response = await fetch("/api/shortcut", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Pairing-Code": bridgeCode,
-      },
-      body: JSON.stringify({ keys }),
+    const result = await relayRequest({
+      action: "sendCommand",
+      keys,
+      pairingCode: bridgeCode,
+      remoteToken,
     });
-    if (response.ok) {
+    if (result.ok) {
       setStatus("SENT");
-    } else if (response.status === 401) {
+    } else if (result.status === 401) {
       setStatus("PAIR");
       localStorage.removeItem(BRIDGE_CODE_KEY);
-      lockApp("Pair Code가 맞지 않습니다. 다시 링크하세요.", true);
+      localStorage.removeItem(REMOTE_TOKEN_KEY);
+      lockRemote("Pair Code가 맞지 않습니다. 다시 링크하세요.", true);
     } else {
       setStatus("BRIDGE");
     }
   } catch {
     setStatus("OFFLINE");
-    lockApp("브리지 서버 연결이 끊겼습니다. 같은 주소로 다시 접속하세요.", true);
+    lockRemote("릴레이 서버 연결이 끊겼습니다. 다시 시도하세요.", true);
   }
 }
 
-async function verifyPairCode(code) {
+function handleReceivedShortcut(keys) {
+  emitShortcut(keys);
+  const text = formatKeys(keys);
+  els.lastCommand.textContent = `수신: ${text}`;
+  setStatus(text);
+  window.dispatchEvent(new CustomEvent("hotkey-deck-command", { detail: { keys } }));
+}
+
+async function relayRequest(payload) {
+  const response = await fetch("/api/relay", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  let data = {};
   try {
-    const response = await fetch("/api/pair", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Pairing-Code": code,
-      },
-      body: JSON.stringify({}),
-    });
-    return response.ok;
+    data = await response.json();
   } catch {
-    return false;
+    data = {};
   }
+  return { ...data, ok: response.ok && data.ok !== false, status: response.status };
 }
 
 async function linkPairCode(code) {
@@ -493,19 +531,79 @@ async function linkPairCode(code) {
 
   els.pairMessage.textContent = "링크 확인 중...";
   els.pairMessage.classList.remove("is-error");
-  const ok = await verifyPairCode(nextCode);
-  if (!ok) {
-    lockApp("Pair Code가 틀렸거나 브리지 서버로 접속하지 않았습니다.", true);
+  const result = await relayRequest({ action: "joinRemote", pairingCode: nextCode });
+  if (!result.ok) {
+    lockRemote("Pair Code가 틀렸거나 컴퓨터 화면이 열려 있지 않습니다.", true);
     return false;
   }
 
   bridgeCode = nextCode;
+  remoteToken = result.remoteToken || "";
   localStorage.setItem(BRIDGE_CODE_KEY, bridgeCode);
+  localStorage.setItem(REMOTE_TOKEN_KEY, remoteToken);
   els.bridgeCode.value = bridgeCode;
   els.pairCodeInput.value = bridgeCode;
   unlockApp();
   setStatus("LINKED");
   return true;
+}
+
+async function createHostSession() {
+  lockApp("컴퓨터 세션을 준비하는 중입니다...");
+  try {
+    const result = await relayRequest({ action: "createHost" });
+    if (!result.ok) throw new Error("create_host_failed");
+    bridgeCode = result.pairingCode;
+    hostToken = result.hostToken;
+    lastCommandId = 0;
+    els.bridgeCode.value = bridgeCode;
+    els.bridgeCode.readOnly = true;
+    els.pairCodeInput.value = bridgeCode;
+    els.lastCommand.textContent = `Pair Code: ${bridgeCode}`;
+    unlockHost();
+    setStatus(bridgeCode);
+    startHostPolling();
+  } catch {
+    lockApp("호스트 세션을 만들 수 없습니다. Vercel 또는 로컬 서버를 확인하세요.", true);
+  }
+}
+
+function startHostPolling() {
+  window.clearTimeout(pollTimer);
+  const poll = async () => {
+    try {
+      const result = await relayRequest({
+        action: "pollHost",
+        afterId: lastCommandId,
+        hostToken,
+        pairingCode: bridgeCode,
+      });
+      if (result.ok) {
+        const commands = result.commands || [];
+        commands.forEach((command) => {
+          lastCommandId = Math.max(lastCommandId, Number(command.id) || 0);
+          handleReceivedShortcut(command.keys || []);
+        });
+      }
+    } catch {
+      setStatus("RETRY");
+    } finally {
+      pollTimer = window.setTimeout(poll, 450);
+    }
+  };
+  poll();
+}
+
+function initializeConnection() {
+  if (isHost) {
+    createHostSession();
+    return;
+  }
+
+  lockRemote();
+  if (bridgeCode && remoteToken) {
+    linkPairCode(bridgeCode);
+  }
 }
 
 function setStatus(text) {
@@ -780,7 +878,4 @@ document.querySelectorAll("[data-icon]").forEach((node) => {
 });
 
 render();
-lockApp();
-if (bridgeCode) {
-  linkPairCode(bridgeCode);
-}
+initializeConnection();

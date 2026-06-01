@@ -8,6 +8,8 @@ const PORT = Number(process.env.PORT || 4173);
 const ROOT = __dirname;
 const ROOT_PATH = resolve(ROOT);
 const PAIRING_CODE = process.env.PAIRING_CODE || String(Math.floor(100000 + Math.random() * 900000));
+const relayRooms = new Map();
+const RELAY_ROOM_TTL_MS = 1000 * 60 * 30;
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -20,6 +22,11 @@ createServer(async (request, response) => {
   try {
     if (request.method === "POST" && request.url === "/api/pair") {
       handlePair(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && request.url === "/api/relay") {
+      await handleRelay(request, response);
       return;
     }
 
@@ -64,6 +71,116 @@ async function serveFile(request, response) {
     response.end(content);
   } catch {
     send(response, 404, "Not found");
+  }
+}
+
+async function handleRelay(request, response) {
+  const body = await readBody(request);
+  const payload = parseJsonBody(body, response);
+  if (!payload) return;
+  pruneRelayRooms();
+
+  if (payload.action === "createHost") {
+    createRelayHost(response);
+    return;
+  }
+
+  if (payload.action === "joinRemote") {
+    joinRelayRemote(payload, response);
+    return;
+  }
+
+  if (payload.action === "sendCommand") {
+    sendRelayCommand(payload, response);
+    return;
+  }
+
+  if (payload.action === "pollHost") {
+    pollRelayHost(payload, response);
+    return;
+  }
+
+  sendJson(response, 400, { ok: false, error: "unknown_action" });
+}
+
+function createRelayHost(response) {
+  const pairingCode = createRelayCode();
+  const hostToken = createRelayToken();
+  relayRooms.set(pairingCode, {
+    commands: [],
+    hostToken,
+    lastId: 0,
+    pairingCode,
+    remoteToken: null,
+    updatedAt: Date.now(),
+  });
+  sendJson(response, 200, { ok: true, pairingCode, hostToken });
+}
+
+function joinRelayRemote(payload, response) {
+  const room = relayRooms.get(String(payload.pairingCode || ""));
+  if (!room) {
+    sendJson(response, 401, { ok: false, error: "pairing_required" });
+    return;
+  }
+
+  room.remoteToken = room.remoteToken || createRelayToken();
+  room.updatedAt = Date.now();
+  sendJson(response, 200, { ok: true, pairingCode: room.pairingCode, remoteToken: room.remoteToken });
+}
+
+function sendRelayCommand(payload, response) {
+  const room = relayRooms.get(String(payload.pairingCode || ""));
+  if (!room || payload.remoteToken !== room.remoteToken) {
+    sendJson(response, 401, { ok: false, error: "remote_not_linked" });
+    return;
+  }
+
+  const keys = Array.isArray(payload.keys) ? payload.keys.map(String).slice(0, 8) : [];
+  if (!keys.length) {
+    sendJson(response, 400, { ok: false, error: "missing_keys" });
+    return;
+  }
+
+  room.lastId += 1;
+  room.updatedAt = Date.now();
+  room.commands.push({ id: room.lastId, keys, sentAt: Date.now() });
+  room.commands = room.commands.slice(-50);
+  sendJson(response, 200, { ok: true, commandId: room.lastId });
+}
+
+function pollRelayHost(payload, response) {
+  const room = relayRooms.get(String(payload.pairingCode || ""));
+  if (!room || payload.hostToken !== room.hostToken) {
+    sendJson(response, 401, { ok: false, error: "host_not_linked" });
+    return;
+  }
+
+  const afterId = Number(payload.afterId || 0);
+  room.updatedAt = Date.now();
+  sendJson(response, 200, {
+    ok: true,
+    commands: room.commands.filter((command) => command.id > afterId),
+    remoteLinked: Boolean(room.remoteToken),
+  });
+}
+
+function createRelayCode() {
+  let code = "";
+  do {
+    code = String(Math.floor(100000 + Math.random() * 900000));
+  } while (relayRooms.has(code));
+  return code;
+}
+
+function createRelayToken() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function pruneRelayRooms() {
+  const now = Date.now();
+  for (const [code, room] of relayRooms) {
+    if (now - room.updatedAt > RELAY_ROOM_TTL_MS) relayRooms.delete(code);
   }
 }
 

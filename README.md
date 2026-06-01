@@ -3,11 +3,11 @@
 > A browser-based Stream Deck style macro pad for mobile landscape control.
 
 `Hotkey Deck`은 휴대폰을 가로로 눕혀 하드웨어 매크로 패드처럼 사용하는 웹 기반 단축키 컨트롤러입니다.  
-폰에서 버튼을 누르면 같은 네트워크의 Mac 또는 Windows 노트북으로 단축키가 전달됩니다.
+폰에서 버튼을 누르면 컴퓨터에서 열어둔 같은 웹페이지로 단축키 명령이 전달됩니다.
 
 ![Static App](https://img.shields.io/badge/app-static%20web-32d7ff)
 ![Mobile First](https://img.shields.io/badge/mobile-landscape-89f27e)
-![Bridge](https://img.shields.io/badge/bridge-macOS%20%7C%20Windows-ffc95b)
+![Relay](https://img.shields.io/badge/relay-browser%20to%20browser-ffc95b)
 ![Storage](https://img.shields.io/badge/storage-localStorage-7096ff)
 
 ## Preview
@@ -35,7 +35,7 @@
 - 키 리코더로 직접 단축키 지정
 - 아이콘 선택 및 이미지 업로드
 - 더블탭 확대 방지
-- macOS / Windows 브리지 서버 지원
+- Vercel API 기반 브라우저-브라우저 릴레이
 
 ## Default Layout
 
@@ -62,35 +62,31 @@ python3 -m http.server 4173
 http://127.0.0.1:4173/index.html
 ```
 
-### 2. 휴대폰으로 컴퓨터 조작
+### 2. Vercel / 로컬 릴레이로 휴대폰 연결
 
-실제 단축키를 Mac 또는 Windows 노트북으로 보내려면 브리지 서버를 실행합니다.
+컴퓨터와 휴대폰이 같은 링크에 접속합니다.
 
-```sh
-node server.js
-```
+컴퓨터에서 접속하면 자동으로 `host`가 되고, 설정 패널에 Pair Code가 표시됩니다.  
+휴대폰에서 접속하면 Pair Code 입력 화면이 먼저 뜹니다.
 
-터미널에 다음처럼 표시됩니다.
+강제로 역할을 지정하고 싶으면 URL에 role을 붙일 수 있습니다.
 
 ```text
-Hotkey Deck bridge is running.
-Pair code: 123456
-Open one of these URLs on your phone:
-  http://localhost:4173/
-  http://192.168.x.x:4173/
+https://your-app.vercel.app/?role=host
+https://your-app.vercel.app/?role=remote
 ```
 
-휴대폰에서 `http://192.168.x.x:4173/` 주소를 열고, 접속 전 팝업에 터미널의 `Pair code`를 입력합니다.  
-`Link`가 성공해야 단축키 화면이 열립니다.
+폰에서 Pair Code를 입력하고 `Link`가 성공하면 단축키 덱이 열립니다.
 
 ## How It Works
 
 ```mermaid
 flowchart LR
-  Phone["Phone Browser"] -->|"Pair Code / Shortcut Request"| Bridge["Local Bridge Server"]
-  Bridge -->|"Verify Pair Code"| Auth["Pair Check"]
-  Auth -->|"OK"| OS["Computer OS"]
-  OS -->|"macOS: osascript<br/>Windows: PowerShell SendKeys"| App["Focused Desktop App"]
+  Host["Computer Browser<br/>(host)"] -->|"create room"| Relay["Vercel /api/relay"]
+  Phone["Phone Browser<br/>(remote)"] -->|"Pair Code"| Relay
+  Phone -->|"button command"| Relay
+  Relay -->|"poll command"| Host
+  Host -->|"KeyboardEvent + custom event"| WebApp["Same Web Page"]
 ```
 
 ## Pairing Model
@@ -99,11 +95,11 @@ flowchart LR
 
 | 항목 | 현재 방식 |
 | --- | --- |
-| 컴퓨터 식별 | 같은 Wi-Fi의 LAN IP |
-| 초기 인증 | 터미널에 표시된 Pair Code |
+| 컴퓨터 식별 | Vercel 릴레이 room + Pair Code |
+| 초기 인증 | 컴퓨터 화면에 표시된 Pair Code |
 | 이후 인증 | 브라우저 LocalStorage에 저장된 Pair Code |
 | 단축키 저장 | 휴대폰 브라우저 LocalStorage |
-| 입력 대상 | 브리지 서버가 실행 중인 컴퓨터의 현재 포커스 창 |
+| 입력 대상 | 컴퓨터에서 열어둔 같은 웹페이지 |
 
 향후 제품형 구조로 확장한다면 아래 모델이 더 적합합니다.
 
@@ -116,27 +112,15 @@ flowchart LR
 | 이후 인증 | HMAC 서명 또는 토큰 검증 |
 | 단축키 저장 | 노트북 SQLite |
 
-## Platform Notes
+## Web-only Mode
 
-### macOS
+이 프로젝트는 현재 웹페이지 안에서만 명령을 처리하는 모드에 맞춰져 있습니다.
 
-처음 사용할 때는 터미널 또는 Node.js에 아래 권한을 허용해야 합니다.
+- 컴퓨터 브라우저는 `host`로 Pair Code를 만들고 명령을 수신합니다.
+- 휴대폰 브라우저는 `remote`로 Pair Code를 입력하고 버튼 명령을 보냅니다.
+- 컴퓨터 브라우저는 수신한 명령을 `KeyboardEvent`와 `hotkey-deck-command` 커스텀 이벤트로 발생시킵니다.
 
-```text
-System Settings > Privacy & Security > Accessibility
-```
-
-macOS 키 입력은 `osascript`와 `System Events`를 사용합니다.
-
-### Windows
-
-Windows에서는 아래 조건이 필요합니다.
-
-- Windows 노트북과 휴대폰이 같은 Wi-Fi에 연결
-- Windows 방화벽에서 Node.js의 개인 네트워크 접근 허용
-- 단축키를 받을 프로그램 창이 현재 포커스된 상태
-
-Windows 키 입력은 PowerShell `System.Windows.Forms.SendKeys`를 사용합니다.
+다른 데스크톱 앱에 실제 OS 키 입력을 보내는 기능은 웹 보안 정책상 별도 로컬 브리지가 필요합니다.
 
 ## Project Structure
 
@@ -145,7 +129,8 @@ hotkey/
 ├─ index.html   # App shell and pairing/settings UI
 ├─ styles.css   # Stream Deck style responsive design
 ├─ app.js       # Deck state, profiles, pairing gate, shortcut dispatch
-├─ server.js    # Local bridge server for macOS / Windows input
+├─ api/relay.js # Vercel relay function for host/remote browsers
+├─ server.js    # Local dev server and optional native bridge experiments
 └─ README.md
 ```
 
@@ -154,9 +139,10 @@ hotkey/
 ```sh
 node --check app.js
 node --check server.js
+node --check api/relay.js
 ```
 
-브리지 서버 실행:
+로컬 릴레이 서버 실행:
 
 ```sh
 node server.js
@@ -176,9 +162,9 @@ PORT=4175 node server.js
 - HMAC 서명 기반 요청 검증
 - 연결된 휴대폰 목록과 연결 해제 UI
 - 덱 프리셋 가져오기 / 내보내기
-- Windows 실기 테스트 강화
+- 안정적인 외부 저장소 기반 릴레이
 
 ## Important
 
 일반 웹 브라우저는 보안 정책상 다른 데스크톱 앱으로 전역 단축키를 직접 보낼 수 없습니다.  
-이 프로젝트의 `server.js`는 같은 네트워크의 휴대폰 요청을 받아 로컬 컴퓨터에서 OS 키 입력을 발생시키는 브리지입니다.
+현재 Vercel 릴레이 모드는 컴퓨터에서 열어둔 같은 웹페이지 안으로만 명령을 전달합니다.
