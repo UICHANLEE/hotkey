@@ -65,6 +65,19 @@ body.is-locked .app-shell {
   visibility: hidden;
 }
 
+body.is-host .app-shell {
+  display: block;
+}
+
+body.is-host .deck-wrap,
+body.is-host #settingsToggle,
+body.is-host #closeSettings,
+body.is-host .bridge-row,
+body.is-remote .control-panel,
+body.is-remote #settingsToggle {
+  display: none;
+}
+
 .deck-wrap {
   min-width: 0;
   display: grid;
@@ -383,8 +396,20 @@ h2 {
   transition: transform 180ms ease;
 }
 
+body.is-host .control-panel {
+  position: static;
+  width: min(100%, 56rem);
+  min-height: calc(100svh - 2rem);
+  margin: 0 auto;
+  transform: none;
+}
+
 body.is-settings-open .control-panel {
   transform: translateX(0);
+}
+
+body.is-host.is-settings-open .control-panel {
+  transform: none;
 }
 
 body.is-locked .control-panel {
@@ -446,6 +471,42 @@ body.is-locked .control-panel {
 .bridge-row {
   grid-template-columns: 1fr minmax(0, 1.2fr) auto;
   align-items: center;
+}
+
+.host-pairing {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 8.5rem;
+  gap: 1rem;
+  align-items: center;
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.8rem;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.host-pairing h2 {
+  font-size: clamp(1.7rem, 6vw, 3rem);
+  font-variant-numeric: tabular-nums;
+}
+
+.host-pairing a {
+  display: block;
+  justify-self: end;
+}
+
+.host-pairing img {
+  display: block;
+  width: 8.5rem;
+  height: 8.5rem;
+  border-radius: 0.45rem;
+  background: #fff;
+  padding: 0.35rem;
+}
+
+.host-pairing .pair-copy {
+  grid-column: 1 / -1;
+  margin-top: 0;
 }
 
 label {
@@ -679,6 +740,16 @@ input[type="file"] {
   .control-panel,
   .pair-card {
     padding: 0.75rem;
+  }
+}
+
+@media (max-width: 620px) {
+  .host-pairing {
+    grid-template-columns: 1fr;
+  }
+
+  .host-pairing a {
+    justify-self: start;
   }
 }
 

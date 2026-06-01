@@ -81,7 +81,7 @@ async function handleRelay(request, response) {
   pruneRelayRooms();
 
   if (payload.action === "createHost") {
-    createRelayHost(response);
+    createRelayHost(payload, response);
     return;
   }
 
@@ -103,9 +103,19 @@ async function handleRelay(request, response) {
   sendJson(response, 400, { ok: false, error: "unknown_action" });
 }
 
-function createRelayHost(response) {
-  const pairingCode = createRelayCode();
-  const hostToken = createRelayToken();
+function createRelayHost(payload, response) {
+  let pairingCode = String(payload.pairingCode || "");
+  let hostToken = String(payload.hostToken || "");
+  const existing = relayRooms.get(pairingCode);
+
+  if (existing && existing.hostToken === hostToken) {
+    existing.updatedAt = Date.now();
+    sendJson(response, 200, { ok: true, pairingCode, hostToken });
+    return;
+  }
+
+  if (!pairingCode || relayRooms.has(pairingCode)) pairingCode = createRelayCode();
+  if (!hostToken) hostToken = createRelayToken();
   relayRooms.set(pairingCode, {
     commands: [],
     hostToken,

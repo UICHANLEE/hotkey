@@ -14,7 +14,7 @@ module.exports = function handler(request, response) {
       pruneRooms();
 
       if (payload.action === "createHost") {
-        createHost(response);
+        createHost(payload, response);
         return;
       }
 
@@ -40,9 +40,19 @@ module.exports = function handler(request, response) {
     });
 };
 
-function createHost(response) {
-  const pairingCode = createPairingCode();
-  const hostToken = createToken();
+function createHost(payload, response) {
+  let pairingCode = String(payload.pairingCode || "");
+  let hostToken = String(payload.hostToken || "");
+  const existing = rooms.get(pairingCode);
+
+  if (existing && existing.hostToken === hostToken) {
+    existing.updatedAt = Date.now();
+    sendJson(response, 200, { ok: true, pairingCode, hostToken });
+    return;
+  }
+
+  if (!pairingCode || rooms.has(pairingCode)) pairingCode = createPairingCode();
+  if (!hostToken) hostToken = createToken();
   rooms.set(pairingCode, {
     commands: [],
     createdAt: Date.now(),

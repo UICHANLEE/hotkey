@@ -1,5 +1,7 @@
 const PROFILE_STORAGE_KEY = "hotkey-deck-profiles-v1";
 const BRIDGE_CODE_KEY = "hotkey-deck-bridge-code";
+const HOST_CODE_KEY = "hotkey-deck-host-code";
+const HOST_TOKEN_KEY = "hotkey-deck-host-token";
 const REMOTE_TOKEN_KEY = "hotkey-deck-remote-token";
 const LEGACY_STORAGE_KEYS = ["hotkey-deck-state-v2", "hotkey-deck-state-v1"];
 const DEFAULT_PROFILE_ID = "default";
@@ -98,6 +100,10 @@ const els = {
   settingsToggle: document.querySelector("#settingsToggle"),
   closeSettings: document.querySelector("#closeSettings"),
   controlPanel: document.querySelector("#controlPanel"),
+  hostPairing: document.querySelector("#hostPairing"),
+  hostPairCode: document.querySelector("#hostPairCode"),
+  qrImage: document.querySelector("#qrImage"),
+  qrLink: document.querySelector("#qrLink"),
   pairOverlay: document.querySelector("#pairOverlay"),
   pairCodeInput: document.querySelector("#pairCodeInput"),
   pairMessage: document.querySelector("#pairMessage"),
@@ -130,7 +136,7 @@ let draftIcon = "play";
 let draftImage = "";
 let recording = false;
 let bridgeCode = localStorage.getItem(BRIDGE_CODE_KEY) || "";
-let hostToken = "";
+let hostToken = localStorage.getItem(HOST_TOKEN_KEY) || "";
 let remoteToken = localStorage.getItem(REMOTE_TOKEN_KEY) || "";
 let lastCommandId = 0;
 let pollTimer = 0;
@@ -281,6 +287,7 @@ function detectHostMode() {
   const role = new URLSearchParams(window.location.search).get("role");
   if (role === "host") return true;
   if (role === "remote") return false;
+  if (new URLSearchParams(window.location.search).get("pair")) return false;
   return !(window.matchMedia("(pointer: coarse)").matches && window.innerWidth < 900);
 }
 
@@ -361,7 +368,7 @@ function renderEditor() {
   renderIconPicker();
 }
 
-function lockApp(message = "터미널에 표시된 Pair code를 입력하세요.", isError = false) {
+function lockApp(message = "컴퓨터 화면에 표시된 Pair Code를 입력하세요.", isError = false) {
   isLinked = false;
   document.body.classList.add("is-locked");
   document.body.classList.remove("is-linked", "is-settings-open");
@@ -387,14 +394,14 @@ function unlockApp() {
 function unlockHost() {
   isLinked = true;
   document.body.classList.remove("is-locked");
-  document.body.classList.add("is-linked", "is-settings-open");
+  document.body.classList.add("is-linked", "is-settings-open", "is-host");
   els.pairOverlay.hidden = true;
   els.pairMessage.classList.remove("is-error");
   syncSettingsPanelState();
 }
 
 function syncSettingsPanelState() {
-  const isOpen = document.body.classList.contains("is-settings-open") && isLinked;
+  const isOpen = (document.body.classList.contains("is-settings-open") || isHost) && isLinked;
   els.controlPanel.setAttribute("aria-hidden", String(!isOpen));
   if ("inert" in els.controlPanel) {
     els.controlPanel.inert = !isOpen;
@@ -551,14 +558,20 @@ async function linkPairCode(code) {
 async function createHostSession() {
   lockApp("컴퓨터 세션을 준비하는 중입니다...");
   try {
-    const result = await relayRequest({ action: "createHost" });
+    document.body.classList.add("is-host");
+    bridgeCode = localStorage.getItem(HOST_CODE_KEY) || "";
+    hostToken = localStorage.getItem(HOST_TOKEN_KEY) || "";
+    const result = await relayRequest({ action: "createHost", pairingCode: bridgeCode, hostToken });
     if (!result.ok) throw new Error("create_host_failed");
     bridgeCode = result.pairingCode;
     hostToken = result.hostToken;
     lastCommandId = 0;
+    localStorage.setItem(HOST_CODE_KEY, bridgeCode);
+    localStorage.setItem(HOST_TOKEN_KEY, hostToken);
     els.bridgeCode.value = bridgeCode;
     els.bridgeCode.readOnly = true;
     els.pairCodeInput.value = bridgeCode;
+    renderQrCode();
     els.lastCommand.textContent = `Pair Code: ${bridgeCode}`;
     unlockHost();
     setStatus(bridgeCode);
@@ -566,6 +579,18 @@ async function createHostSession() {
   } catch {
     lockApp("호스트 세션을 만들 수 없습니다. Vercel 또는 로컬 서버를 확인하세요.", true);
   }
+}
+
+function renderQrCode() {
+  const remoteUrl = new URL(window.location.href);
+  remoteUrl.search = "";
+  remoteUrl.hash = "";
+  remoteUrl.searchParams.set("role", "remote");
+  remoteUrl.searchParams.set("pair", bridgeCode);
+  const url = remoteUrl.toString();
+  els.hostPairCode.textContent = bridgeCode;
+  els.qrLink.href = url;
+  els.qrImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=10&data=${encodeURIComponent(url)}`;
 }
 
 function startHostPolling() {
@@ -596,12 +621,18 @@ function startHostPolling() {
 
 function initializeConnection() {
   if (isHost) {
+    document.body.classList.add("is-host");
     createHostSession();
     return;
   }
 
+  document.body.classList.add("is-remote");
+  bridgeCode = new URLSearchParams(window.location.search).get("pair") || bridgeCode;
   lockRemote();
   if (bridgeCode && remoteToken) {
+    linkPairCode(bridgeCode);
+  } else if (bridgeCode) {
+    els.pairCodeInput.value = bridgeCode;
     linkPairCode(bridgeCode);
   }
 }
