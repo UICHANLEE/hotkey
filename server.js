@@ -10,6 +10,7 @@ const ROOT_PATH = resolve(ROOT);
 const PAIRING_CODE = process.env.PAIRING_CODE || String(Math.floor(100000 + Math.random() * 900000));
 const relayRooms = new Map();
 const RELAY_ROOM_TTL_MS = 1000 * 60 * 30;
+const MAX_BODY_BYTES = 1024 * 1024 * 3;
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -95,6 +96,16 @@ async function handleRelay(request, response) {
     return;
   }
 
+  if (payload.action === "updateState") {
+    updateRelayState(payload, response);
+    return;
+  }
+
+  if (payload.action === "getState") {
+    getRelayState(payload, response);
+    return;
+  }
+
   if (payload.action === "pollHost") {
     pollRelayHost(payload, response);
     return;
@@ -109,6 +120,10 @@ function createRelayHost(payload, response) {
   const existing = relayRooms.get(pairingCode);
 
   if (existing && existing.hostToken === hostToken) {
+    if (payload.state) {
+      existing.state = payload.state;
+      existing.stateVersion = (Number(existing.stateVersion) || 0) + 1;
+    }
     existing.updatedAt = Date.now();
     sendJson(response, 200, { ok: true, pairingCode, hostToken });
     return;
@@ -122,6 +137,8 @@ function createRelayHost(payload, response) {
     lastId: 0,
     pairingCode,
     remoteToken: null,
+    state: payload.state || null,
+    stateVersion: payload.state ? 1 : 0,
     updatedAt: Date.now(),
   });
   sendJson(response, 200, { ok: true, pairingCode, hostToken });
@@ -136,7 +153,13 @@ function joinRelayRemote(payload, response) {
 
   room.remoteToken = room.remoteToken || createRelayToken();
   room.updatedAt = Date.now();
-  sendJson(response, 200, { ok: true, pairingCode: room.pairingCode, remoteToken: room.remoteToken });
+  sendJson(response, 200, {
+    ok: true,
+    pairingCode: room.pairingCode,
+    remoteToken: room.remoteToken,
+    state: room.state,
+    stateVersion: room.stateVersion,
+  });
 }
 
 function sendRelayCommand(payload, response) {
@@ -157,6 +180,35 @@ function sendRelayCommand(payload, response) {
   room.commands.push({ id: room.lastId, keys, sentAt: Date.now() });
   room.commands = room.commands.slice(-50);
   sendJson(response, 200, { ok: true, commandId: room.lastId });
+}
+
+function updateRelayState(payload, response) {
+  const room = relayRooms.get(String(payload.pairingCode || ""));
+  if (!room || payload.hostToken !== room.hostToken) {
+    sendJson(response, 401, { ok: false, error: "host_not_linked" });
+    return;
+  }
+
+  room.state = payload.state || null;
+  room.stateVersion = (Number(room.stateVersion) || 0) + 1;
+  room.updatedAt = Date.now();
+  sendJson(response, 200, { ok: true, stateVersion: room.stateVersion });
+}
+
+function getRelayState(payload, response) {
+  const room = relayRooms.get(String(payload.pairingCode || ""));
+  if (!room || payload.remoteToken !== room.remoteToken) {
+    sendJson(response, 401, { ok: false, error: "remote_not_linked" });
+    return;
+  }
+
+  room.updatedAt = Date.now();
+  const stateVersion = Number(payload.stateVersion || 0);
+  sendJson(response, 200, {
+    ok: true,
+    state: room.stateVersion > stateVersion ? room.state : null,
+    stateVersion: room.stateVersion,
+  });
 }
 
 function pollRelayHost(payload, response) {
@@ -241,7 +293,7 @@ function readBody(request) {
     let body = "";
     request.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 4096) {
+      if (body.length > MAX_BODY_BYTES) {
         request.destroy();
         reject(new Error("Request body too large"));
       }

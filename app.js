@@ -5,6 +5,7 @@ const HOST_TOKEN_KEY = "hotkey-deck-host-token";
 const REMOTE_TOKEN_KEY = "hotkey-deck-remote-token";
 const LEGACY_STORAGE_KEYS = ["hotkey-deck-state-v2", "hotkey-deck-state-v1"];
 const DEFAULT_PROFILE_ID = "default";
+const COMMAND_CHANNEL = "hotkey-deck-command";
 
 const palette = ["#32d7ff", "#89f27e", "#ffc95b", "#ff5f83", "#7096ff", "#b98cff", "#f3f7ff"];
 const pickerIcons = [
@@ -113,6 +114,7 @@ const els = {
   saveBridge: document.querySelector("#saveBridge"),
   rowsInput: document.querySelector("#rowsInput"),
   colsInput: document.querySelector("#colsInput"),
+  settingsButtonList: document.querySelector("#settingsButtonList"),
   resetDeck: document.querySelector("#resetDeck"),
   editorEmpty: document.querySelector("#editorEmpty"),
   editor: document.querySelector("#buttonEditor"),
@@ -140,8 +142,20 @@ let hostToken = localStorage.getItem(HOST_TOKEN_KEY) || "";
 let remoteToken = localStorage.getItem(REMOTE_TOKEN_KEY) || "";
 let lastCommandId = 0;
 let pollTimer = 0;
+let statePollTimer = 0;
+let stateSyncTimer = 0;
+let remoteStateVersion = 0;
 let isLinked = false;
 let isHost = detectHostMode();
+let commandChannel = null;
+
+if ("BroadcastChannel" in window) {
+  commandChannel = new BroadcastChannel(COMMAND_CHANNEL);
+  commandChannel.addEventListener("message", (event) => {
+    const keys = Array.isArray(event.data?.keys) ? event.data.keys : [];
+    emitShortcut(keys, false);
+  });
+}
 
 function createEmptyButton(index) {
   return {
@@ -271,6 +285,7 @@ function normalizeLogoIcon(iconName, label) {
 function saveState() {
   getActiveProfile().state = state;
   saveStore();
+  queueHostStateSync();
 }
 
 function saveStore() {
@@ -332,6 +347,7 @@ function render() {
     els.grid.appendChild(key);
   });
 
+  renderSettingsButtonList();
   renderEditor();
   syncSettingsPanelState();
 }
@@ -344,6 +360,28 @@ function renderProfiles() {
     option.textContent = profile.name;
     option.selected = profile.id === store.activeProfileId;
     els.profileSelect.appendChild(option);
+  });
+}
+
+function renderSettingsButtonList() {
+  els.settingsButtonList.innerHTML = "";
+  state.buttons.forEach((button, index) => {
+    const choice = document.createElement("button");
+    choice.type = "button";
+    choice.className = `settings-button ${selectedIndex === index ? "is-selected" : ""}`;
+    choice.style.setProperty("--accent", button.accent);
+    choice.setAttribute("aria-label", `${button.label} 편집`);
+    choice.innerHTML = `
+      <span class="settings-button-icon">
+        ${button.image ? `<img src="${escapeAttribute(button.image)}" alt="" />` : iconSvg(button.icon)}
+      </span>
+      <span>
+        <span class="settings-button-main">${escapeHtml(button.label || `M${index + 1}`)}</span>
+        <span class="settings-button-meta">${escapeHtml(formatKeys(button.keys) || button.caption || "EMPTY")}</span>
+      </span>
+    `;
+    choice.addEventListener("click", () => selectButtonForEditing(index));
+    els.settingsButtonList.appendChild(choice);
   });
 }
 
@@ -436,6 +474,12 @@ function renderIconPicker() {
   });
 }
 
+function selectButtonForEditing(index) {
+  selectedIndex = index;
+  render();
+  setStatus(`M${index + 1}`);
+}
+
 function pressButton(index) {
   selectedIndex = index;
   const button = state.buttons[index];
@@ -444,13 +488,12 @@ function pressButton(index) {
   window.setTimeout(() => node?.classList.remove("is-pressed"), 230);
 
   if (navigator.vibrate) navigator.vibrate(18);
-  if (isHost) handleReceivedShortcut(button.keys);
+  if (isHost) renderEditor();
   else sendBridgeShortcut(button.keys);
   setStatus(formatKeys(button.keys) || button.label || "EMPTY");
-  renderEditor();
 }
 
-function emitShortcut(keys) {
+function emitShortcut(keys, broadcast = true) {
   if (!keys.length) return;
   const key = keys[keys.length - 1];
   const codeMap = {
@@ -474,6 +517,7 @@ function emitShortcut(keys) {
   document.dispatchEvent(new KeyboardEvent("keydown", eventInit));
   document.dispatchEvent(new KeyboardEvent("keyup", eventInit));
   window.dispatchEvent(new CustomEvent("macro-pad-shortcut", { detail: { keys } }));
+  if (broadcast) commandChannel?.postMessage({ keys, sentAt: Date.now() });
 }
 
 async function sendBridgeShortcut(keys) {
@@ -493,16 +537,27 @@ async function sendBridgeShortcut(keys) {
     if (result.ok) {
       setStatus("SENT");
     } else if (result.status === 401) {
+      const linked = await relinkRemote(false);
+      if (linked) {
+        const retry = await relayRequest({
+          action: "sendCommand",
+          keys,
+          pairingCode: bridgeCode,
+          remoteToken,
+        });
+        if (retry.ok) {
+          setStatus("SENT");
+          return;
+        }
+      }
       setStatus("PAIR");
-      localStorage.removeItem(BRIDGE_CODE_KEY);
-      localStorage.removeItem(REMOTE_TOKEN_KEY);
-      lockRemote("Pair Code가 맞지 않습니다. 다시 링크하세요.", true);
+      els.lastCommand.textContent = "연결을 다시 확인하는 중입니다.";
     } else {
       setStatus("BRIDGE");
     }
   } catch {
     setStatus("OFFLINE");
-    lockRemote("릴레이 서버 연결이 끊겼습니다. 다시 시도하세요.", true);
+    els.lastCommand.textContent = "릴레이 서버 응답을 기다리는 중입니다.";
   }
 }
 
@@ -529,6 +584,108 @@ async function relayRequest(payload) {
   return { ...data, ok: response.ok && data.ok !== false, status: response.status };
 }
 
+function queueHostStateSync() {
+  if (!isHost || !isLinked || !bridgeCode || !hostToken) return;
+  window.clearTimeout(stateSyncTimer);
+  stateSyncTimer = window.setTimeout(syncHostStateToRelay, 180);
+}
+
+async function syncHostStateToRelay() {
+  if (!isHost || !bridgeCode || !hostToken) return false;
+  try {
+    const result = await relayRequest({
+      action: "updateState",
+      hostToken,
+      pairingCode: bridgeCode,
+      state,
+    });
+    if (result.ok) return true;
+    if (result.status === 401) return recreateHostRoom();
+  } catch {
+    setStatus("SYNC");
+  }
+  return false;
+}
+
+async function recreateHostRoom() {
+  if (!isHost || !bridgeCode || !hostToken) return false;
+  try {
+    const result = await relayRequest({
+      action: "createHost",
+      pairingCode: bridgeCode,
+      hostToken,
+      state,
+    });
+    if (!result.ok) return false;
+    bridgeCode = result.pairingCode;
+    hostToken = result.hostToken;
+    localStorage.setItem(HOST_CODE_KEY, bridgeCode);
+    localStorage.setItem(HOST_TOKEN_KEY, hostToken);
+    els.bridgeCode.value = bridgeCode;
+    renderQrCode();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function applyRemoteState(nextState, version = remoteStateVersion) {
+  if (!nextState) return;
+  const normalized = normalizeState(nextState);
+  remoteStateVersion = Math.max(remoteStateVersion, Number(version) || 0);
+  state = normalized;
+  getActiveProfile().state = state;
+  saveStore();
+  selectedIndex = null;
+  render();
+}
+
+async function refreshRemoteState() {
+  if (isHost || !isLinked || !bridgeCode || !remoteToken) return false;
+  try {
+    const result = await relayRequest({
+      action: "getState",
+      pairingCode: bridgeCode,
+      remoteToken,
+      stateVersion: remoteStateVersion,
+    });
+    if (result.ok) {
+      if (result.state) applyRemoteState(result.state, result.stateVersion);
+      return true;
+    }
+    if (result.status === 401) return relinkRemote(false);
+  } catch {
+    setStatus("RETRY");
+  }
+  return false;
+}
+
+function startRemoteStatePolling() {
+  window.clearTimeout(statePollTimer);
+  const poll = async () => {
+    await refreshRemoteState();
+    statePollTimer = window.setTimeout(poll, 1600);
+  };
+  poll();
+}
+
+async function relinkRemote(showErrors = true) {
+  if (!bridgeCode) return false;
+  const result = await relayRequest({ action: "joinRemote", pairingCode: bridgeCode });
+  if (!result.ok) {
+    if (showErrors) lockRemote("Pair Code가 틀렸거나 컴퓨터 화면이 열려 있지 않습니다.", true);
+    return false;
+  }
+  remoteToken = result.remoteToken || "";
+  localStorage.setItem(BRIDGE_CODE_KEY, bridgeCode);
+  localStorage.setItem(REMOTE_TOKEN_KEY, remoteToken);
+  if (result.state) applyRemoteState(result.state, result.stateVersion);
+  unlockApp();
+  startRemoteStatePolling();
+  setStatus("LINKED");
+  return true;
+}
+
 async function linkPairCode(code) {
   const nextCode = code.trim();
   if (!nextCode) {
@@ -538,21 +695,10 @@ async function linkPairCode(code) {
 
   els.pairMessage.textContent = "링크 확인 중...";
   els.pairMessage.classList.remove("is-error");
-  const result = await relayRequest({ action: "joinRemote", pairingCode: nextCode });
-  if (!result.ok) {
-    lockRemote("Pair Code가 틀렸거나 컴퓨터 화면이 열려 있지 않습니다.", true);
-    return false;
-  }
-
   bridgeCode = nextCode;
-  remoteToken = result.remoteToken || "";
-  localStorage.setItem(BRIDGE_CODE_KEY, bridgeCode);
-  localStorage.setItem(REMOTE_TOKEN_KEY, remoteToken);
   els.bridgeCode.value = bridgeCode;
   els.pairCodeInput.value = bridgeCode;
-  unlockApp();
-  setStatus("LINKED");
-  return true;
+  return relinkRemote(true);
 }
 
 async function createHostSession() {
@@ -561,7 +707,7 @@ async function createHostSession() {
     document.body.classList.add("is-host");
     bridgeCode = localStorage.getItem(HOST_CODE_KEY) || "";
     hostToken = localStorage.getItem(HOST_TOKEN_KEY) || "";
-    const result = await relayRequest({ action: "createHost", pairingCode: bridgeCode, hostToken });
+    const result = await relayRequest({ action: "createHost", pairingCode: bridgeCode, hostToken, state });
     if (!result.ok) throw new Error("create_host_failed");
     bridgeCode = result.pairingCode;
     hostToken = result.hostToken;
@@ -575,6 +721,7 @@ async function createHostSession() {
     els.lastCommand.textContent = `Pair Code: ${bridgeCode}`;
     unlockHost();
     setStatus(bridgeCode);
+    syncHostStateToRelay();
     startHostPolling();
   } catch {
     lockApp("호스트 세션을 만들 수 없습니다. Vercel 또는 로컬 서버를 확인하세요.", true);
@@ -609,6 +756,8 @@ function startHostPolling() {
           lastCommandId = Math.max(lastCommandId, Number(command.id) || 0);
           handleReceivedShortcut(command.keys || []);
         });
+      } else if (result.status === 401) {
+        await recreateHostRoom();
       }
     } catch {
       setStatus("RETRY");
@@ -683,6 +832,7 @@ function switchProfile(profileId) {
   selectedIndex = null;
   saveStore();
   render();
+  queueHostStateSync();
   setStatus(getActiveProfile().name);
 }
 
@@ -701,6 +851,7 @@ function addProfile() {
   selectedIndex = null;
   saveStore();
   render();
+  queueHostStateSync();
   setStatus("PROFILE");
 }
 

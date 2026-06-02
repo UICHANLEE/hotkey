@@ -2,6 +2,7 @@ const rooms = globalThis.__hotkeyRooms || new Map();
 globalThis.__hotkeyRooms = rooms;
 
 const ROOM_TTL_MS = 1000 * 60 * 30;
+const MAX_BODY_BYTES = 1024 * 1024 * 3;
 
 module.exports = function handler(request, response) {
   if (request.method !== "POST") {
@@ -28,6 +29,16 @@ module.exports = function handler(request, response) {
         return;
       }
 
+      if (payload.action === "updateState") {
+        updateState(payload, response);
+        return;
+      }
+
+      if (payload.action === "getState") {
+        getState(payload, response);
+        return;
+      }
+
       if (payload.action === "pollHost") {
         pollHost(payload, response);
         return;
@@ -46,6 +57,10 @@ function createHost(payload, response) {
   const existing = rooms.get(pairingCode);
 
   if (existing && existing.hostToken === hostToken) {
+    if (payload.state) {
+      existing.state = payload.state;
+      existing.stateVersion = (Number(existing.stateVersion) || 0) + 1;
+    }
     existing.updatedAt = Date.now();
     sendJson(response, 200, { ok: true, pairingCode, hostToken });
     return;
@@ -60,6 +75,8 @@ function createHost(payload, response) {
     lastId: 0,
     pairingCode,
     remoteToken: null,
+    state: payload.state || null,
+    stateVersion: payload.state ? 1 : 0,
     updatedAt: Date.now(),
   });
   sendJson(response, 200, { ok: true, pairingCode, hostToken });
@@ -78,6 +95,8 @@ function joinRemote(payload, response) {
     ok: true,
     pairingCode: room.pairingCode,
     remoteToken: room.remoteToken,
+    state: room.state,
+    stateVersion: room.stateVersion,
   });
 }
 
@@ -99,6 +118,35 @@ function sendCommand(payload, response) {
   room.commands.push({ id: room.lastId, keys, sentAt: Date.now() });
   room.commands = room.commands.slice(-50);
   sendJson(response, 200, { ok: true, commandId: room.lastId });
+}
+
+function updateState(payload, response) {
+  const room = rooms.get(String(payload.pairingCode || ""));
+  if (!room || payload.hostToken !== room.hostToken) {
+    sendJson(response, 401, { ok: false, error: "host_not_linked" });
+    return;
+  }
+
+  room.state = payload.state || null;
+  room.stateVersion = (Number(room.stateVersion) || 0) + 1;
+  room.updatedAt = Date.now();
+  sendJson(response, 200, { ok: true, stateVersion: room.stateVersion });
+}
+
+function getState(payload, response) {
+  const room = rooms.get(String(payload.pairingCode || ""));
+  if (!room || payload.remoteToken !== room.remoteToken) {
+    sendJson(response, 401, { ok: false, error: "remote_not_linked" });
+    return;
+  }
+
+  room.updatedAt = Date.now();
+  const stateVersion = Number(payload.stateVersion || 0);
+  sendJson(response, 200, {
+    ok: true,
+    state: room.stateVersion > stateVersion ? room.state : null,
+    stateVersion: room.stateVersion,
+  });
 }
 
 function pollHost(payload, response) {
@@ -141,7 +189,7 @@ function readJson(request) {
     let body = "";
     request.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 4096) {
+      if (body.length > MAX_BODY_BYTES) {
         request.destroy();
         reject(new Error("body_too_large"));
       }
