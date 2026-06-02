@@ -78,6 +78,22 @@ https://your-app.vercel.app/?role=remote
 
 폰에서 QR 또는 Pair Code 링크가 성공하면 단축키 덱이 열립니다. 컴퓨터 화면은 새로고침해도 같은 Pair Code와 설정 상태를 유지합니다.
 
+Vercel에서 PC와 휴대폰이 안정적으로 통신하려면 Redis 저장소를 연결해야 합니다. Vercel Marketplace의 Redis/Upstash를 붙인 뒤 아래 환경변수 중 한 세트가 있으면 `/api/relay`가 자동으로 Redis를 사용합니다.
+
+```text
+KV_REST_API_URL
+KV_REST_API_TOKEN
+```
+
+또는
+
+```text
+UPSTASH_REDIS_REST_URL
+UPSTASH_REDIS_REST_TOKEN
+```
+
+환경변수가 없으면 로컬 테스트용 메모리 릴레이로 동작합니다. 로컬에서는 괜찮지만 Vercel 서버리스 배포에서는 요청이 다른 인스턴스로 갈 수 있어 연결이 끊길 수 있습니다.
+
 ## How It Works
 
 ```mermaid
@@ -98,7 +114,7 @@ flowchart LR
 | 컴퓨터 식별 | Vercel 릴레이 room + Pair Code |
 | 초기 인증 | 컴퓨터 화면의 QR 코드 또는 Pair Code |
 | 이후 인증 | 브라우저 LocalStorage에 저장된 Pair Code |
-| 단축키 저장 | 휴대폰 브라우저 LocalStorage |
+| 단축키 저장 | 컴퓨터 브라우저 LocalStorage + Redis 릴레이 동기화 |
 | 입력 대상 | 컴퓨터에서 열어둔 같은 웹페이지 |
 
 향후 제품형 구조로 확장한다면 아래 모델이 더 적합합니다.

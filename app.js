@@ -103,6 +103,7 @@ const els = {
   controlPanel: document.querySelector("#controlPanel"),
   hostPairing: document.querySelector("#hostPairing"),
   hostPairCode: document.querySelector("#hostPairCode"),
+  hostReceived: document.querySelector("#hostReceived"),
   qrImage: document.querySelector("#qrImage"),
   qrLink: document.querySelector("#qrLink"),
   pairOverlay: document.querySelector("#pairOverlay"),
@@ -565,6 +566,7 @@ function handleReceivedShortcut(keys) {
   emitShortcut(keys);
   const text = formatKeys(keys);
   els.lastCommand.textContent = `수신: ${text}`;
+  if (els.hostReceived) els.hostReceived.textContent = `최근 수신: ${text || "EMPTY"}`;
   setStatus(text);
   window.dispatchEvent(new CustomEvent("hotkey-deck-command", { detail: { keys } }));
 }
